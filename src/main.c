@@ -57,6 +57,11 @@ int main(int argc, char **argv)
     gtk_widget_show_all(g_display_window);
     gtk_widget_grab_focus(g_display_window);
 
+    /* Dev/testing hook: cold-boot immediately instead of waiting for the
+     * operator to click Power (default behaviour is unchanged). */
+    if (g_getenv("SYSTEM23_AUTOSTART"))
+        machine_start();
+
     gtk_main();
     return 0;
 }

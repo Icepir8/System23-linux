@@ -2,9 +2,13 @@
  *  memory.c — banked memory subsystem (faithful port of Memory.cs)
  * ===========================================================================*/
 #include "memory.h"
+#include "cpu8085.h"     /* cpu.pc, for the debug write-watch */
 
 #include <stdio.h>
 #include <string.h>
+
+/* Debug: when nonzero, log every CPU write to this address with the PC. */
+u16 dbg_memwatch = 0;
 
 u8  mem_rom[MEM_SIZE];
 u8  mem_ram[MEM_SIZE];
@@ -42,6 +46,8 @@ u16 memory_read16(u16 addr)
 
 bool memory_write(u16 addr, u8 value)
 {
+    if (dbg_memwatch && addr == dbg_memwatch)
+        fprintf(stderr, "[MEMW] %04X <- %02X  @PC~%04X\n", addr, value, cpu.pc);
     if ((addr & 0x8000) == 0x8000) {
         if ((addr & 0x7FFF) < 0x4000) {
             /* Legacy quirk preserved from the original: swallow a specific

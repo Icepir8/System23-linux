@@ -29,6 +29,20 @@ and launches; `make clean` removes build artifacts.
 
 ## What works today
 
+- **8085 CPU engine** — full port of the interpreter from
+  `Assembler85.RunInstruction` (now in `cpu8085.c`), including the undocumented
+  flags (V, K) and opcodes (DSUB, ARHL, RDEL, LDHI, LDSI, LHLX, SHLX, RSTV,
+  JK/JNK), exact flag/PSW behaviour and cycle counts, RST 5.5/6.5/7.5 + INTR
+  vectoring, and a cycle-paced ~3 MHz run-loop. `make test` runs instruction
+  self-tests and a real-ROM smoke run.
+- **I/O + timer + CRTC — POST boots.** `ioports.c` ports the full `IN`/`OUT`
+  dispatch (`IOports.cs`) with the three 8255 PPIs inlined and the memory page
+  registers; `i8253.c` is a complete 8253 PIT (all six modes, Counter 2 → RST
+  7.5); `i8275.c` is the 8275 CRTC. With these, the real ROS 1.05 firmware boots
+  through reset into POST — it programs the CRTC, starts the display and renders
+  its diagnostic step codes on the green screen. Run `SYSTEM23_AUTOSTART=1
+  ./bin/system23` to cold-boot and watch it. The 8259 PIC accepts its init
+  sequence (full priority resolution is still TODO).
 - **Primary Display window** with the operator toolbar built in code (as in the
   original): Power (with a Reset / Power Off menu while running), ROM-set
   selector, Language selector, and Floppy / Debug / Printer / About buttons.
@@ -59,15 +73,10 @@ Each of these is a real translation unit with the correct public API and a
 
 | Module (C)            | Ported from            | Notes                              |
 |-----------------------|------------------------|------------------------------------|
-| `cpu8085.c`           | `Assembler85.cs` (`RunInstruction`) + `Registers` | instruction engine — the big one |
-| `ioports.c`           | `IOports.cs`           | I/O read/write dispatch + wiring    |
-| `i8255.c`             | `I8255PPI.cs`          | 3× PPI                              |
-| `i8257.c`             | `I8257DMA.cs`          | DMA                                 |
-| `i8275.c`             | `I8275CTRC.cs`         | CRTC (display-facing fields real)   |
-| `i8259.c`             | `I8259PIC.cs`          | PIC (assert/deassert IRQ)           |
-| `i8253.c`             | `I8253PIT.cs`          | PIT                                 |
-| `i8251.c`             | `I8251UART.cs`         | USART                               |
-| `i765a_fdc.c`         | `I765AFDC.cs` / `NEC765FDC.cs` | floppy controller           |
+| `i8257.c` / DMA ports | `I8257DMA.cs`          | channel ports are latches; transfers TODO |
+| `i8259.c`             | `I8259PIC.cs`          | accepts init seq; priority/vectoring TODO |
+| `i8251.c`             | `I8251UART.cs`         | USART / printer                     |
+| `i765a_fdc.c`         | `FloppyController.cs`  | FDC-card 8255 + 8748 controller + NEC765 status regs ported (POST drive test 39 passes); NEC765 command engine + disk I/O TODO |
 | `floppy.c`            | `FloppyController.cs`  | mount metadata is real; sector I/O TODO |
 | `sasi.c`              | `SasiHostAdapter.cs`   | SASI → IBM 5247 hard disk           |
 | `i8748.c`             | `I8748.cs`             | 8748 keyboard controller (MCS-48)   |
@@ -77,18 +86,25 @@ Each of these is a real translation unit with the correct public API and a
 
 ## Suggested porting order
 
-1. **`cpu8085.c`** — port `RunInstruction` (opcode interpreter) and the flag
-   helpers. The run-loop in `machine.c` already calls `cpu8085_step`; drop the
-   stub-idle branch and add the cycle-correct ~3 MHz throttle noted there.
-2. **`ioports.c`** — `ReadIOport` / `WriteIOport` and the page registers, then
-   wire the CRTC (`i8275`) so the Display lights up with real screen content.
-3. **Timers/interrupts** — `i8253` + `i8259` so POST can progress.
-4. **Peripherals** — `i8255`, `i8257`, `i8251`, then the FDC/floppy, SASI and
-   the 8748 keyboard controller.
-5. **`ui/debug_window.c`, `ui/floppy_dialog.c`, `ui/printer_window.c`** — split
-   the placeholders in `ui/windows.c` into full windows.
-6. **Keyboard matrix** — replace the provisional GDK→scancode table in
-   `ui/display.c` with the full mapping, validated against the 8748 firmware.
+Done so far: the 8085 CPU, the `IN`/`OUT` dispatch + memory page registers, the
+three 8255 PPIs, the 8253 PIT and the 8275 CRTC — enough that the real firmware
+boots and runs POST on screen.
+
+1. ~~`cpu8085.c` — 8085 interpreter.~~ **Done.**
+2. ~~`ioports.c` + 8255 PPIs + page registers.~~ **Done.**
+3. ~~`i8253.c` (PIT) + `i8275.c` (CRTC) — POST runs, display live.~~ **Done.**
+4. FDC — **in progress.** The FDC-card 8255 handshake (Mode 0 latch + Mode 2
+   8748 walk test), the 8748 stepper-controller command dispatch + register RAM,
+   and the NEC765 status registers (SRB/MSR/DOR) are ported in `i765a_fdc.c`.
+   POST's drive-0 self-test (39) and test 33 now pass; POST failures dropped from
+   5 to 3. Remaining: the NEC765 **command engine** (StartCommand/DispatchCommand
+   + read/write data), 8257 DMA transfers, and IMD disk-image loading — the path
+   to actually loading a diskette and booting past POST.
+5. **`i8259.c`** full priority resolution + `InterruptAcknowledge8085` and real
+   interrupt delivery — clears the interrupt/timer tests (36) and makes the
+   **keyboard matrix** (`ui/display.c`, validated against the 8748) usable.
+6. **`i8251.c`** (USART/printer — POST test 37/38 also poke it), SASI (`sasi.c`),
+   and splitting the `ui/windows.c` placeholders into full windows.
 
 ---
 

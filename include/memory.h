@@ -20,6 +20,7 @@ extern u8  mem_ram[MEM_SIZE];
 
 /* Page registers (written by the I/O layer). */
 extern u32 mem_dma_page;
+extern u16 dbg_memwatch;   /* debug: watch CPU writes to this address */
 extern u32 mem_rom_page;
 extern u32 mem_ram_page_write;
 extern u32 mem_ram_page_read;

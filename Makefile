@@ -23,7 +23,7 @@ SRC     := $(shell find src -name '*.c')
 OBJ     := $(patsubst src/%.c,build/%.o,$(SRC))
 DEP     := $(OBJ:.o=.d)
 
-.PHONY: all run clean
+.PHONY: all run clean test
 
 all: $(BIN)
 
@@ -38,6 +38,14 @@ build/%.o: src/%.c
 
 run: $(BIN)
 	./$(BIN)
+
+# CPU self-tests + real-ROM smoke run (off-tree harness; links the non-GUI
+# objects only).  Usage:  make test  &&  ./build/boottest Roms
+TEST_OBJ := build/cpu8085.o build/memory.o build/ioports.o build/i8259.o \
+            build/i8253.o build/i8275.o build/i8257.o build/i765a_fdc.o build/i8251.o build/floppy.o
+test: $(BIN)
+	$(CC) $(CFLAGS) tools/boottest.c $(TEST_OBJ) -o build/boottest -lm
+	@echo "  ->  built build/boottest   (run: ./build/boottest Roms)"
 
 clean:
 	$(RM) -r build $(BIN)

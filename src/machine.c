@@ -8,7 +8,10 @@
 #include "ioports.h"
 #include "i8275.h"
 #include "i8259.h"
+#include "i8257.h"
+#include "i8251.h"
 #include "floppy.h"
+#include "i765a_fdc.h"
 
 #include <glib.h>
 
@@ -50,7 +53,10 @@ void machine_init(void)
     io_country = g_config.language;
     resolve_roms_dir();
 
-    machine_initialize();   /* cold power-on, no execution */
+    dma_reset();             /* power-on the 8257 DMA controller */
+    uart_reset();            /* power-on the 8251 USART */
+    fdc_reset();             /* power-on the floppy subsystem (field-init state) */
+    machine_initialize();    /* cold power-on, no execution */
     restore_floppies();
 }
 
@@ -87,19 +93,21 @@ static gpointer run_loop(gpointer data)
     u16         next = cpu.pc;
 
     while (state == EXEC_RUNNING && err[0] == '\0') {
-        for (int i = 0; i < 1000 && state == EXEC_RUNNING; i++) {
+        gint64 start     = g_get_monotonic_time();   /* microseconds */
+        u64    start_cyc = cpu_cycles;
+
+        for (int i = 0; i < 1000 && state == EXEC_RUNNING && err[0] == '\0'; i++) {
             u16 current = next;
             err = cpu8085_step(current, &next);
         }
 
-        if (cpu8085_is_stub()) {
-            /* CPU not ported yet: idle instead of spinning at 100% CPU. */
-            g_usleep(10 * 1000);
-        } else {
-            /* TODO: cycle-correct ~3 MHz throttle.  Track cpu_cycles across the
-             * batch and sleep until (cycles * 1e6 / 3_000_000) microseconds of
-             * wall-clock (g_get_monotonic_time) have elapsed. */
-        }
+        /* Cycle-correct ~3 MHz pacing: the 8085 runs 3 cycles per microsecond,
+         * so sleep off whatever wall-clock time is left in this batch. */
+        u64    spent    = cpu_cycles - start_cyc;
+        gint64 expected = (gint64)(spent / 3);
+        gint64 elapsed  = g_get_monotonic_time() - start;
+        if (expected > elapsed)
+            g_usleep((gulong)(expected - elapsed));
     }
 
     state = EXEC_STOPPED;
