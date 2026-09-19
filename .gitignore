@@ -1,0 +1,10 @@
+# build output
+/build/
+/bin/
+
+# editor / OS
+*.o
+*.d
+*~
+.vscode/
+.idea/
