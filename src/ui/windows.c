@@ -1,5 +1,28 @@
 /* SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2026 Owen V. Michael, Jr.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
  */
 /* ===========================================================================
  *  ui/windows.c — secondary windows/dialogs
@@ -19,7 +42,9 @@
 #include "disassembler85.h"
 #include "i8251.h"
 #include "assets.h"
+#include "printer.h"
 #include <stdlib.h>
+#include <math.h>
 
 #include <string.h>
 
@@ -801,30 +826,165 @@ void debug_window_show(GtkWindow *parent)
     if (!dbg.timer) dbg.timer = g_timeout_add(200, dbg_refresh, NULL);
 }
 
-/* ---- Printer window: shows output the guest sends to the 8251/printer -----*/
+/* ---- Printer window: renders the paper the printer emulation builds --------
+ * The USART feeds bytes to printer.c, which lays them out as pages of cells.
+ * Here we draw those pages (per-model typeface, bold/underline) and can send
+ * them to a real printer via the native GTK/CUPS print dialog.  A "Raw bytes"
+ * toggle shows the underlying stream for interpreter refinement. */
+#define PRT_CW   8.0     /* cell width  (px)                 */
+#define PRT_CH   15.0    /* cell height (px)                 */
+#define PRT_MRG  24.0    /* sheet inner margin               */
+#define PRT_OUT  16.0    /* outer padding around the sheets  */
+#define PRT_GAP  18.0    /* gap between sheets               */
+
 static struct {
-    GtkWidget *win;
-    GtkWidget *view;
+    GtkWidget *win, *area, *area_sc, *raw_view, *raw_sc, *model_combo, *raw_toggle;
     guint      timer;
+    unsigned long last_serial;
 } prt;
+
+static int prt_doc_cols(void)
+{
+    int c = printer_used_cols();
+    if (c < 40)       c = 40;
+    if (c > PRT_COLS) c = PRT_COLS;
+    return c;
+}
+
+/* Paint one page's cells at the current origin (0,0 = top-left of the grid). */
+static void prt_paint_cells(cairo_t *cr, const PrtPage *pg, int cols, PrinterModel m)
+{
+    if (!pg) return;
+    const char *family = printer_is_daisy(m) ? "serif" : "monospace";
+    cairo_set_source_rgb(cr, 0.06, 0.06, 0.06);
+    for (int r = 0; r < PRT_ROWS; r++)
+        for (int c = 0; c < cols; c++) {
+            const PrtCell *cell = &pg->cell[r][c];
+            double cx = c * PRT_CW, cy = r * PRT_CH;
+            if (cell->ul) { cairo_rectangle(cr, cx, cy + PRT_CH * 0.90, PRT_CW, 1.0); cairo_fill(cr); }
+            if (cell->ch && cell->ch != ' ') {
+                cairo_select_font_face(cr, family, CAIRO_FONT_SLANT_NORMAL,
+                    cell->bold ? CAIRO_FONT_WEIGHT_BOLD : CAIRO_FONT_WEIGHT_NORMAL);
+                cairo_set_font_size(cr, PRT_CH * 0.80);
+                char s[2] = { (char)cell->ch, 0 };
+                cairo_move_to(cr, cx + PRT_CW * 0.08, cy + PRT_CH * 0.76);
+                cairo_show_text(cr, s);
+            }
+        }
+}
+
+static gboolean prt_draw(GtkWidget *w, cairo_t *cr, gpointer d)
+{
+    (void)w; (void)d;
+    int cols = prt_doc_cols(), count = printer_page_count();
+    PrinterModel m = printer_model();
+    double sw = 2 * PRT_MRG + cols * PRT_CW, sh = 2 * PRT_MRG + PRT_ROWS * PRT_CH;
+    cairo_set_source_rgb(cr, 0.50, 0.50, 0.52); cairo_paint(cr);     /* platen */
+    double y = PRT_OUT;
+    for (int p = 0; p < count; p++) {
+        double x = PRT_OUT;
+        cairo_set_source_rgb(cr, 1, 1, 1); cairo_rectangle(cr, x, y, sw, sh); cairo_fill(cr);
+        cairo_set_source_rgb(cr, 0.68, 0.68, 0.68); cairo_set_line_width(cr, 1.0);
+        cairo_rectangle(cr, x + 0.5, y + 0.5, sw - 1, sh - 1); cairo_stroke(cr);
+        cairo_save(cr); cairo_translate(cr, x + PRT_MRG, y + PRT_MRG);
+        prt_paint_cells(cr, printer_page(p), cols, m);
+        cairo_restore(cr);
+        y += sh + PRT_GAP;
+    }
+    return FALSE;
+}
+
+static void prt_update_size(void)
+{
+    int cols = prt_doc_cols(), count = printer_page_count();
+    double sw = 2 * PRT_MRG + cols * PRT_CW, sh = 2 * PRT_MRG + PRT_ROWS * PRT_CH;
+    gtk_widget_set_size_request(prt.area, (int)(sw + 2 * PRT_OUT),
+                                          (int)(count * (sh + PRT_GAP) + 2 * PRT_OUT));
+}
+
+static void prt_update_raw(void)
+{
+    static char raw[65536];
+    int n = printer_raw(raw, (int)sizeof raw);
+    GString *g = g_string_new(NULL);
+    for (int i = 0; i < n; i += 16) {
+        g_string_append_printf(g, "%04X  ", i);
+        for (int j = 0; j < 16; j++)
+            if (i + j < n) g_string_append_printf(g, "%02X ", (unsigned char)raw[i + j]);
+            else           g_string_append(g, "   ");
+        g_string_append(g, "  ");
+        for (int j = 0; j < 16 && i + j < n; j++) {
+            unsigned char b = (unsigned char)raw[i + j];
+            g_string_append_c(g, (b >= 0x20 && b < 0x7F) ? (char)b : '.');
+        }
+        g_string_append_c(g, '\n');
+    }
+    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(prt.raw_view)), g->str, -1);
+    g_string_free(g, TRUE);
+}
 
 static gboolean prt_refresh(gpointer data)
 {
     (void)data;
-    static char buf[16384];
-    uart_get_print_output(buf, (int)sizeof buf);
-    GtkTextBuffer *tb = gtk_text_view_get_buffer(GTK_TEXT_VIEW(prt.view));
-    /* Only rewrite when the length changed, to keep the caret/scroll stable. */
-    if (gtk_text_buffer_get_char_count(tb) != (gint)strlen(buf))
-        gtk_text_buffer_set_text(tb, buf, -1);
+    unsigned long s = printer_serial();
+    if (s == prt.last_serial) return G_SOURCE_CONTINUE;
+    prt.last_serial = s;
+    prt_update_size();
+    gtk_widget_queue_draw(prt.area);
+    if (prt.raw_toggle && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(prt.raw_toggle)))
+        prt_update_raw();
     return G_SOURCE_CONTINUE;
 }
 
-static void prt_on_clear(GtkButton *b, gpointer d)
+static void prt_on_model(GtkComboBox *cb, gpointer d)
+{
+    (void)d;
+    int i = gtk_combo_box_get_active(cb);
+    if (i < 0) return;
+    printer_set_model((PrinterModel)i);
+    g_config.printer_model = i;              /* saved on exit */
+    gtk_widget_queue_draw(prt.area);
+}
+
+static void prt_on_clear(GtkButton *b, gpointer d) { (void)b; (void)d; printer_clear(); prt_refresh(NULL); }
+
+static void prt_on_raw(GtkToggleButton *t, gpointer d)
+{
+    (void)d;
+    gboolean on = gtk_toggle_button_get_active(t);
+    gtk_widget_set_visible(prt.raw_sc,  on);
+    gtk_widget_set_visible(prt.area_sc, !on);
+    if (on) prt_update_raw();
+}
+
+/* Native print: render each page onto the print context, scaled to the paper. */
+static void prt_draw_page_cb(GtkPrintOperation *op, GtkPrintContext *ctx, gint page_nr, gpointer d)
+{
+    (void)op; (void)d;
+    const PrtPage *pg = printer_page(page_nr);
+    if (!pg) return;
+    cairo_t *cr = gtk_print_context_get_cairo_context(ctx);
+    double pw = gtk_print_context_get_width(ctx), ph = gtk_print_context_get_height(ctx);
+    int cols = prt_doc_cols();
+    double gw = cols * PRT_CW, gh = PRT_ROWS * PRT_CH;
+    double sc = fmin(pw / gw, ph / gh);
+    cairo_save(cr);
+    cairo_translate(cr, (pw - gw * sc) / 2.0, 0);
+    cairo_scale(cr, sc, sc);
+    prt_paint_cells(cr, pg, cols, printer_model());
+    cairo_restore(cr);
+}
+
+static void prt_on_print(GtkButton *b, gpointer d)
 {
     (void)b; (void)d;
-    uart_clear_print_output();
-    prt_refresh(NULL);
+    GtkPrintOperation *op = gtk_print_operation_new();
+    gtk_print_operation_set_n_pages(op, printer_page_count());
+    gtk_print_operation_set_job_name(op, "System/23 printout");
+    g_signal_connect(op, "draw-page", G_CALLBACK(prt_draw_page_cb), NULL);
+    gtk_print_operation_run(op, GTK_PRINT_OPERATION_ACTION_PRINT_DIALOG,
+                            prt.win ? GTK_WINDOW(prt.win) : NULL, NULL);
+    g_object_unref(op);
 }
 
 static gboolean prt_on_delete(GtkWidget *w, GdkEvent *e, gpointer d)
@@ -841,29 +1001,63 @@ void printer_window_set_visible(GtkWindow *parent, gboolean visible)
         if (!prt.win) {
             prt.win = gtk_window_new(GTK_WINDOW_TOPLEVEL);
             gtk_window_set_title(GTK_WINDOW(prt.win), "Printer");
-            gtk_window_set_default_size(GTK_WINDOW(prt.win), 560, 400);
+            gtk_window_set_default_size(GTK_WINDOW(prt.win), 720, 580);
             if (parent) gtk_window_set_transient_for(GTK_WINDOW(prt.win), parent);
             g_signal_connect(prt.win, "delete-event", G_CALLBACK(prt_on_delete), NULL);
 
             GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
             gtk_container_set_border_width(GTK_CONTAINER(box), 8);
 
-            prt.view = gtk_text_view_new();
-            gtk_text_view_set_editable(GTK_TEXT_VIEW(prt.view), FALSE);
-            gtk_text_view_set_monospace(GTK_TEXT_VIEW(prt.view), TRUE);
-            gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(prt.view), GTK_WRAP_CHAR);
-            GtkWidget *sc = gtk_scrolled_window_new(NULL, NULL);
-            gtk_container_add(GTK_CONTAINER(sc), prt.view);
-            gtk_box_pack_start(GTK_BOX(box), sc, TRUE, TRUE, 0);
+            /* Toolbar: model selector, Print…, Clear, Raw-bytes toggle. */
+            GtkWidget *bar = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 6);
+            gtk_box_pack_start(GTK_BOX(bar), gtk_label_new("Printer:"), FALSE, FALSE, 0);
+            prt.model_combo = gtk_combo_box_text_new();
+            for (int i = 0; i < PRT_MODEL_COUNT; i++)
+                gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(prt.model_combo),
+                                               printer_model_name((PrinterModel)i));
+            gtk_combo_box_set_active(GTK_COMBO_BOX(prt.model_combo), (int)printer_model());
+            g_signal_connect(prt.model_combo, "changed", G_CALLBACK(prt_on_model), NULL);
+            gtk_box_pack_start(GTK_BOX(bar), prt.model_combo, FALSE, FALSE, 0);
 
+            GtkWidget *print = gtk_button_new_with_label("Print\xE2\x80\xA6");
+            g_signal_connect(print, "clicked", G_CALLBACK(prt_on_print), NULL);
+            gtk_box_pack_start(GTK_BOX(bar), print, FALSE, FALSE, 0);
             GtkWidget *clear = gtk_button_new_with_label("Clear");
             g_signal_connect(clear, "clicked", G_CALLBACK(prt_on_clear), NULL);
-            gtk_box_pack_start(GTK_BOX(box), clear, FALSE, FALSE, 0);
+            gtk_box_pack_start(GTK_BOX(bar), clear, FALSE, FALSE, 0);
+
+            prt.raw_toggle = gtk_toggle_button_new_with_label("Raw bytes");
+            g_signal_connect(prt.raw_toggle, "toggled", G_CALLBACK(prt_on_raw), NULL);
+            gtk_box_pack_end(GTK_BOX(bar), prt.raw_toggle, FALSE, FALSE, 0);
+            gtk_box_pack_start(GTK_BOX(box), bar, FALSE, FALSE, 0);
+
+            /* Page render. */
+            prt.area = gtk_drawing_area_new();
+            g_signal_connect(prt.area, "draw", G_CALLBACK(prt_draw), NULL);
+            prt.area_sc = gtk_scrolled_window_new(NULL, NULL);
+            gtk_container_add(GTK_CONTAINER(prt.area_sc), prt.area);
+            gtk_box_pack_start(GTK_BOX(box), prt.area_sc, TRUE, TRUE, 0);
+
+            /* Raw hex view (hidden until toggled). */
+            prt.raw_view = gtk_text_view_new();
+            gtk_text_view_set_editable(GTK_TEXT_VIEW(prt.raw_view), FALSE);
+            gtk_text_view_set_monospace(GTK_TEXT_VIEW(prt.raw_view), TRUE);
+            prt.raw_sc = gtk_scrolled_window_new(NULL, NULL);
+            gtk_container_add(GTK_CONTAINER(prt.raw_sc), prt.raw_view);
+            gtk_box_pack_start(GTK_BOX(box), prt.raw_sc, TRUE, TRUE, 0);
 
             gtk_container_add(GTK_CONTAINER(prt.win), box);
+            prt.last_serial = ~printer_serial();
         }
         gtk_widget_show_all(prt.win);
+        {   /* honor the current Raw-bytes toggle state */
+            gboolean raw_on = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(prt.raw_toggle));
+            gtk_widget_set_visible(prt.raw_sc,  raw_on);
+            gtk_widget_set_visible(prt.area_sc, !raw_on);
+        }
         gtk_window_present(GTK_WINDOW(prt.win));
+        prt_update_size();
+        prt.last_serial = ~printer_serial();     /* force a repaint */
         prt_refresh(NULL);
         if (!prt.timer) prt.timer = g_timeout_add(300, prt_refresh, NULL);
     } else if (prt.win) {

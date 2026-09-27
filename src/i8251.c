@@ -1,5 +1,28 @@
 /* SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2026 Owen V. Michael, Jr.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
  */
 /* ===========================================================================
  *  i8251.c — Intel 8251 USART + printer/wrap adapter
@@ -17,6 +40,7 @@
 #include "i8251.h"
 #include "i8259.h"
 #include "ioports.h"     /* io_diagnostic_port */
+#include "printer.h"     /* printer_feed_byte (real print output) */
 #include "cpu8085.h"     /* cpu_cycles (printer flow-control timing) */
 #include <stdio.h>
 #include <stdlib.h>
@@ -70,8 +94,6 @@ static u8   prt_q[64];
 static int  prt_head, prt_count;
 static long ack_delay = -1;
 static u64  last_tic;
-static char print_out[16384];
-static int  print_out_len;
 
 static void pump_printer_status(void)
 {
@@ -203,11 +225,11 @@ static void on_transmit(u8 b)
         uart_receive(b);
         return;
     }
-    /* Real print output: capture it for the Printer window, and echo it back
-     * to the guest as its printer status (delivered on a later tick, matching
-     * PrinterWrapAdapter's flow control). */
-    if (print_out_len < (int)sizeof print_out - 1)
-        print_out[print_out_len++] = (char)b;
+    /* Real print output: hand it to the printer emulation (which builds the
+     * paper the Printer window renders), and echo it back to the guest as its
+     * printer status (delivered on a later tick, matching PrinterWrapAdapter's
+     * flow control). */
+    printer_feed_byte(b);
     queue_printer_status(b);
 }
 
@@ -245,17 +267,6 @@ void uart_tick(void)
     }
 }
 
-/* Copy captured printer output into buf (NUL-terminated); returns byte count. */
-int  uart_get_print_output(char *buf, int size)
-{
-    int n = (print_out_len < size - 1) ? print_out_len : size - 1;
-    if (n < 0) n = 0;
-    memcpy(buf, print_out, (size_t)n);
-    buf[n] = '\0';
-    return n;
-}
-void uart_clear_print_output(void) { print_out_len = 0; }
-
 void uart_reset(void)
 {
     expect_mode = true;
@@ -275,6 +286,6 @@ void uart_reset(void)
     prt_head = prt_count = 0;
     ack_delay = -1;
     last_tic = 0;
-    /* print_out is left intact across resets so the operator's log survives a
-     * reboot; the Printer window offers a Clear. */
+    /* The printer's paper is left intact across resets so the operator's log
+     * survives a reboot; the Printer window offers a Clear. */
 }

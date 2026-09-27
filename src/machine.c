@@ -1,5 +1,28 @@
 /* SPDX-License-Identifier: BSD-2-Clause
+ *
  * Copyright (c) 2026 Owen V. Michael, Jr.
+ *
+ * Redistribution and use in source and binary forms, with or without
+ * modification, are permitted provided that the following conditions are met:
+ *
+ * 1. Redistributions of source code must retain the above copyright notice,
+ *    this list of conditions and the following disclaimer.
+ *
+ * 2. Redistributions in binary form must reproduce the above copyright notice,
+ *    this list of conditions and the following disclaimer in the documentation
+ *    and/or other materials provided with the distribution.
+ *
+ * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+ * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+ * POSSIBILITY OF SUCH DAMAGE.
  */
 /* ===========================================================================
  *  machine.c — application controller / machine host
@@ -15,6 +38,7 @@
 #include "i8251.h"
 #include "floppy.h"
 #include "i765a_fdc.h"
+#include "printer.h"
 
 #include <glib.h>
 #include <string.h>
@@ -85,6 +109,9 @@ void machine_init(void)
     rom_set    = g_config.rom_set;
     io_country = g_config.language;
     resolve_roms_dir();
+
+    printer_reset();                              /* fresh paper */
+    printer_set_model((PrinterModel)g_config.printer_model);
 
     dma_reset();             /* power-on the 8257 DMA controller */
     uart_reset();            /* power-on the 8251 USART */
@@ -211,8 +238,9 @@ void machine_shutdown(void)
 
     /* Capture live state back into the config (window bounds are written by
      * the UI layer, which owns the widgets). */
-    g_config.rom_set  = rom_set;
-    g_config.language = io_country;
+    g_config.rom_set       = rom_set;
+    g_config.language      = io_country;
+    g_config.printer_model = (int)printer_model();
     g_strlcpy(g_config.roms_path,
               g_path_is_absolute(g_config.roms_path) ? g_config.roms_path : "Roms",
               sizeof g_config.roms_path);
