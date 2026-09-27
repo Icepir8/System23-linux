@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: BSD-2-Clause
+# Copyright (c) 2026 Owen V. Michael, Jr.
 # ============================================================================
 #  System/23 (IBM Datamaster) emulator — Linux / GTK3 port
 #  Plain Makefile: needs only gcc, make, pkg-config and the GTK3 dev package.

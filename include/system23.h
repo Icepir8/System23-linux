@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: BSD-2-Clause
+ * Copyright (c) 2026 Owen V. Michael, Jr.
+ */
 /* ===========================================================================
  *  system23.h — common types, enums and machine geometry
  *

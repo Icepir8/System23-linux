@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: BSD-2-Clause
+ * Copyright (c) 2026 Owen V. Michael, Jr.
+ */
 /* ===========================================================================
  *  i8257.c — Intel 8257 DMA controller (faithful port of I8257DMA.cs)
  *

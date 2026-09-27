@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: BSD-2-Clause
+ * Copyright (c) 2026 Owen V. Michael, Jr.
+ */
 /* ===========================================================================
  *  floppy.c — mounted-diskette model (metadata only for now)
  * ===========================================================================*/

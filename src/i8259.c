@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: BSD-2-Clause
+ * Copyright (c) 2026 Owen V. Michael, Jr.
+ */
 /* ===========================================================================
  *  i8259.c — Intel 8259A PIC (faithful port of I8259PIC.cs)
  *

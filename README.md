@@ -133,3 +133,12 @@ Config lives at `~/.config/System23/config.ini`.
   subtleties flagged `TODO(display)` (the two-pass glyph blit, the 19px graphics
   character width, exact inverted-cell compositing) to validate once real screen
   content is available.
+
+---
+
+## License
+
+This project is licensed under the BSD 2-Clause License — see the
+[LICENSE](LICENSE) file for the full text.
+
+Copyright (c) 2026 Owen V. Michael, Jr.

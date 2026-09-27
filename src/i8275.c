@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: BSD-2-Clause
+ * Copyright (c) 2026 Owen V. Michael, Jr.
+ */
 /* ===========================================================================
  *  i8275.c — Intel 8275 CRT controller (faithful port of I8275CTRC.cs)
  * ===========================================================================*/

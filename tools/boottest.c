@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: BSD-2-Clause
+ * Copyright (c) 2026 Owen V. Michael, Jr.
+ */
 /* boottest.c — off-tree sanity harness for the 8085 engine (not shipped).
  * 1) instruction/flag self-tests with hand-computed expected results
  * 2) runs the real ROS ROM and reports how the CPU fares. */

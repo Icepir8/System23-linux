@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: BSD-2-Clause
+ * Copyright (c) 2026 Owen V. Michael, Jr.
+ */
 /* i8748.h — Intel 8748 (MCS-48) keyboard microcontroller (port of I8748.cs).
  * STUB.  Runs the keyboard-scanner firmware and hands scancodes to the 8255
  * handshake.  Its own instruction engine and the disassembler are TODO. */

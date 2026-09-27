@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: BSD-2-Clause
+ * Copyright (c) 2026 Owen V. Michael, Jr.
+ */
 /* ===========================================================================
  *  i8253.c — Intel 8253 PIT (faithful port of I8253PIT.cs, PitCounter core)
  *

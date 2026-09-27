@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: BSD-2-Clause
+ * Copyright (c) 2026 Owen V. Michael, Jr.
+ */
 /* ===========================================================================
  *  i8259.h — Intel 8259 programmable interrupt controller (port of I8259PIC.cs)
  *  STATUS: stub.  The Display's keyboard path calls i8259_assert_irq(0).

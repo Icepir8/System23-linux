@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: BSD-2-Clause
+ * Copyright (c) 2026 Owen V. Michael, Jr.
+ */
 /* ===========================================================================
  *  i8251.c — Intel 8251 USART + printer/wrap adapter
  *  (faithful port of I8251UART.cs plus the USART-facing parts of
@@ -14,8 +17,10 @@
 #include "i8251.h"
 #include "i8259.h"
 #include "ioports.h"     /* io_diagnostic_port */
+#include "cpu8085.h"     /* cpu_cycles (printer flow-control timing) */
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 static int utr = -1;
 static int utrace(void){ if(utr<0) utr = getenv("SYSTEM23_UARTTRACE")?1:0; return utr; }
 #define UT(...) do{ if(utrace()){ fprintf(stderr,"[UART] "); fprintf(stderr,__VA_ARGS__); fprintf(stderr,"\n"); } }while(0)
@@ -58,6 +63,30 @@ static u8   status28;                   /* adapter port-0x28 status (bit2=rx) */
 static void uart_receive(u8 value);
 static void on_transmit(u8 b);
 static void pump_response(void);
+
+/* ---- printer output capture + flow control (PrinterWrapAdapter) ----------*/
+#define PRT_ACK_DELAY 1000
+static u8   prt_q[64];
+static int  prt_head, prt_count;
+static long ack_delay = -1;
+static u64  last_tic;
+static char print_out[16384];
+static int  print_out_len;
+
+static void pump_printer_status(void)
+{
+    if (prt_count > 0 && (uart_status & ST_RXRDY) == 0) {
+        u8 b = prt_q[prt_head];
+        prt_head = (prt_head + 1) & 63;
+        prt_count--;
+        uart_receive(b);
+    }
+}
+static void queue_printer_status(u8 code)
+{
+    if (prt_count < 64) { prt_q[(prt_head + prt_count) & 63] = code; prt_count++; }
+    if (ack_delay < 0) ack_delay = PRT_ACK_DELAY;   /* deliver on a later tick */
+}
 
 /* ---- 8251 transmit path ---------------------------------------------------*/
 static void set_tx_ready_empty(void)
@@ -174,7 +203,12 @@ static void on_transmit(u8 b)
         uart_receive(b);
         return;
     }
-    /* else: real print output — not needed to boot. */
+    /* Real print output: capture it for the Printer window, and echo it back
+     * to the guest as its printer status (delivered on a later tick, matching
+     * PrinterWrapAdapter's flow control). */
+    if (print_out_len < (int)sizeof print_out - 1)
+        print_out[print_out_len++] = (char)b;
+    queue_printer_status(b);
 }
 
 /* ===========================================================================
@@ -198,7 +232,29 @@ void uart_write_port(u8 port, u8 value)
     }
 }
 
-void uart_tick(void) { /* printer flow-control timing — not needed to boot */ }
+void uart_tick(void)
+{
+    long cyc = (long)(cpu_cycles - last_tic);
+    last_tic = cpu_cycles;
+    if (ack_delay < 0) return;
+    ack_delay -= cyc;
+    if (ack_delay <= 0) {
+        ack_delay = -1;
+        pump_printer_status();
+        if (prt_count > 0) ack_delay = PRT_ACK_DELAY;   /* more queued */
+    }
+}
+
+/* Copy captured printer output into buf (NUL-terminated); returns byte count. */
+int  uart_get_print_output(char *buf, int size)
+{
+    int n = (print_out_len < size - 1) ? print_out_len : size - 1;
+    if (n < 0) n = 0;
+    memcpy(buf, print_out, (size_t)n);
+    buf[n] = '\0';
+    return n;
+}
+void uart_clear_print_output(void) { print_out_len = 0; }
 
 void uart_reset(void)
 {
@@ -215,4 +271,10 @@ void uart_reset(void)
     wrap = true;
     resp_head = resp_count = 0;
     status28 = 0;
+
+    prt_head = prt_count = 0;
+    ack_delay = -1;
+    last_tic = 0;
+    /* print_out is left intact across resets so the operator's log survives a
+     * reboot; the Printer window offers a Clear. */
 }

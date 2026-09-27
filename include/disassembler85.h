@@ -1,6 +1,10 @@
+/* SPDX-License-Identifier: BSD-2-Clause
+ * Copyright (c) 2026 Owen V. Michael, Jr.
+ */
 /* ===========================================================================
  *  disassembler85.h — 8085 disassembler (port of DisAssembler85.cs)
- *  STATUS: stub.  Used by the debug window's code view.
+ *  Full 8085 set incl. the undocumented System/23 opcodes; used by the debug
+ *  window's live code view and the range-disassembly listing.
  * ===========================================================================*/
 #ifndef SYSTEM23_DISASSEMBLER85_H
 #define SYSTEM23_DISASSEMBLER85_H

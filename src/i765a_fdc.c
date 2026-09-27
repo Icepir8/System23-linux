@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: BSD-2-Clause
+ * Copyright (c) 2026 Owen V. Michael, Jr.
+ */
 /* ===========================================================================
  *  i765a_fdc.c — floppy subsystem: FDC-card 8255 + 8748 stepper controller +
  *  NEC765 status registers AND command engine (faithful port of the
@@ -1100,15 +1103,58 @@ static void exec_format_track(void)
                   (u8)fd[drv].current_cylinder, (u8)head, 1, cmd_buf[2] & 0x07);
     fdc_raise_interrupt(0x80);
 }
+/* SCAN EQUAL/LOW-OR-EQUAL/HIGH-OR-EQUAL (0x11/0x19/0x1D).  Faithful port of
+ * FloppyController.ExecScan: compare one sector's disk bytes against the bytes
+ * the 8257 feeds from memory and report satisfied (ST2_SH) / not-satisfied
+ * (ST2_SN).  The System/23 ROS uses this to VERIFY freshly-written sectors, so
+ * a stub that always says "not satisfied" makes every write-verify (e.g. the
+ * in-session marker written by PROC) fail and retry forever -> ERROR 4005. */
 static void exec_scan(int scan_type)
 {
-    (void)scan_type;
-    int drv  = physical_drive(cmd_buf[1] & 0x03);
-    int head = (cmd_buf[1] >> 2) & 0x01;
-    if (!drive_ready765(drv)) { build_not_ready(drv, head); return; }
-    /* TODO: real scan.  Report scan-not-satisfied for now. */
-    build_result7((u8)(drv | (head << 2)), 0, ST2_SN,
-                  (u8)fd[drv].current_cylinder, (u8)head, cmd_buf[4], cmd_buf[5]);
+    int drv    = physical_drive(cmd_buf[1] & 0x03);
+    int head   = (cmd_buf[1] >> 2) & 0x01;
+    int cyl    = cmd_buf[2];
+    int hd     = cmd_buf[3];
+    int sector = cmd_buf[4];
+    int eot    = cmd_buf[6];
+
+    if ((unsigned)drv >= DRIVE_COUNT || !fd[drv].loaded) {
+        build_result7((u8)(ST0_IC_ABNORM | (head << 2) | drv), ST1_ND, 0,
+                      (u8)cyl, (u8)hd, (u8)sector, cmd_buf[5]);
+        fdc_raise_interrupt(0x80);
+        return;
+    }
+
+    FdcDrive *d = &fd[drv];
+    int sec_size = sector_size_at(d, cyl, head);
+    if (sec_size > MAX_XFER_BYTES) sec_size = MAX_XFER_BYTES;
+    u16 addr = (u16)dma_addr[DMA_CHANNEL];
+    int prog = dma_cnt[DMA_CHANNEL] & 0x3FFF;
+    int n = (prog == 0 || prog > sec_size) ? sec_size : prog;
+
+    u8 disk[MAX_XFER_BYTES];
+    memset(disk, 0, sizeof disk);
+    drive_read_sector(d, cyl, head, sector, disk, 0, sec_size);
+
+    int cmp = 0;                       /* 0 equal, -1 mem<disk, +1 mem>disk */
+    for (int i = 0; i < n; i++) {
+        u8 mem = memory_dma_read((u16)(addr + i));
+        if (mem != disk[i]) { cmp = (mem < disk[i]) ? -1 : 1; break; }
+    }
+    dma_addr[DMA_CHANNEL] = (u16)(addr + n);
+    dma_cnt[DMA_CHANNEL] &= 0xC000;    /* count consumed */
+
+    bool hit = (scan_type == 0) ? (cmp == 0)
+             : (scan_type == 1) ? (cmp <= 0)
+             :                    (cmp >= 0);
+    u8 st2 = hit ? ST2_SH : ST2_SN;
+
+    int rC = cyl, rR;
+    if (sector >= eot) { rR = 1; rC = cyl + 1; } else rR = sector + 1;
+    build_result7((u8)(drv | (head << 2)), 0, st2,
+                  (u8)rC, (u8)hd, (u8)rR, cmd_buf[5]);
+    FTRACE("SCAN type=%d cyl%d/h%d/s%d n=%d cmp=%d %s",
+           scan_type, cyl, head, sector, n, cmp, hit ? "HIT" : "MISS");
     fdc_raise_interrupt(0x80);
 }
 

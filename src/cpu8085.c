@@ -1,3 +1,6 @@
+/* SPDX-License-Identifier: BSD-2-Clause
+ * Copyright (c) 2026 Owen V. Michael, Jr.
+ */
 /* ===========================================================================
  *  cpu8085.c — Intel 8085 instruction engine (port of Assembler85.RunInstruction)
  *
@@ -431,9 +434,19 @@ const char *cpu8085_step(u16 addr, u16 *next)
     if (io_do655interrupt) {                 cpu.update_interrupts = true; io_do655interrupt = false; }
 
     /* Post-POST: advertise drive 0 present by patching the cached word at
-     * 0xF6C0 (bit4), so DIR finds the drive without re-running POST test 39. */
+     * 0xF6C0 (bit4), so DIR finds the drive without re-running POST test 39.
+     *
+     * The write MUST be unbanked: the C# reference pokes this through its clsMEM
+     * indexer, which for a >=0x8000 address is Memory.Ram[addr & 0x7FFF] with no
+     * RAM-page arithmetic — i.e. always the fixed slot mem_ram[0x76C0] (the
+     * page-0 mapping of 0xF6C0), regardless of which bank is selected at this
+     * arbitrary instant.  DIR's 0x4153 check reads f6c0 with RAM page 0, so it
+     * looks at that same slot.  Using the *banked* memory_write here would store
+     * the presence bit in whatever page mem_ram_page_write happens to hold right
+     * now (rarely page 0), so DIR would never see it and report "drive not
+     * attached" (the ERROR that then wedges keyboard input). */
     if (io_past_post && !cpu.f6c0_patched && floppy_drives[0].loaded) {
-        memory_write(0xF6C0, (u8)(memory_read(0xF6C0) | 0x10));
+        mem_ram[0xF6C0 & 0x7FFF] = (u8)(mem_ram[0xF6C0 & 0x7FFF] | 0x10);
         cpu.f6c0_patched = true;
     }
     if (io_do755interrupt) { cpu.p75 = true; cpu.update_interrupts = true; io_do755interrupt = false; dbg_pit75++; }
